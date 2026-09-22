@@ -1,1 +1,80 @@
+name: Publish Crux
 
+on:
+  push:
+    branches: [main]
+    paths:
+      - crux-github-pages.zip
+      - .github/workflows/publish.yml
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Extension release version
+        required: true
+        default: v1.0.0
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: crux-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Extract project
+        run: |
+          mkdir -p "$RUNNER_TEMP/crux"
+          unzip -q crux-github-pages.zip -d "$RUNNER_TEMP/crux"
+
+      - name: Read Pages settings
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Build website and extension
+        env:
+          SITE_URL: ${{ steps.pages.outputs.base_url }}
+          RELEASE_TAG: ${{ inputs.version }}
+        run: |
+          cd "$RUNNER_TEMP/crux"
+          node tools/build-pages.mjs
+
+      - name: Upload website
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/crux/_site
+
+      - name: Deploy website
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Publish extension release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.version }}
+        run: |
+          ASSET="$RUNNER_TEMP/crux/release-artifacts/crux-chrome-extension.zip"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET" --clobber
+          else
+            gh release create "$TAG" "$ASSET" \
+              --target "$GITHUB_SHA" \
+              --title "Crux $TAG" \
+              --notes "Download and extract crux-chrome-extension.zip. Open chrome://extensions, enable Developer mode, choose Load unpacked, and select the extracted extension folder."
+          fi
